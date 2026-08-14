@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Karanlık Mod</string>
+    <string name="app_title">Ekran Filtresi</string>
+    <string name="hint_permission">İlk açılışta "Diğer uygulamaların üzerinde göster" izni istenecek. İzin verdikten sonra uygulamaya dön ve butona tekrar bas.</string>
+    <string name="invert_on">Renk Tersleme: AÇIK</string>
+    <string name="invert_off">Renk Tersleme: KAPALI</string>
+    <string name="dim_on">Ekstra Karartma: AÇIK</string>
+    <string name="dim_off">Ekstra Karartma: KAPALI</string>
+</resources>

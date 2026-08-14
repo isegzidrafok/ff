@@ -1,0 +1,2 @@
+rootProject.name = "KaranlikMod"
+include ':app'
