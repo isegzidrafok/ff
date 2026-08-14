@@ -4,12 +4,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.graphics.BlendMode
 import android.graphics.Paint
 import android.graphics.PixelFormat
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -17,11 +17,19 @@ import androidx.core.app.NotificationCompat
 
 /**
  * Ekranın üzerine iki bağımsız katman (overlay) çizen servis:
- *  1) Renk tersleme katmanı: beyaz zemin + DIFFERENCE blend modu -> altındaki
- *     her rengi tersine çevirir (beyaz zemin -> siyah, siyah metin -> beyaz vb).
- *  2) Karartma katmanı: yarı saydam siyah -> ekstra göz yorgunluğu azaltma.
+ *  1) Renk tersleme katmanı: API 29+ üzerinde DIFFERENCE blend modu ile
+ *     oluşturulan beyaz katman.
+ *  2) Karartma katmanı: yarı saydam siyah.
  *
- * İkisi de SYSTEM_ALERT_WINDOW izniyle çalışır, özel/gizli bir izin gerekmez.
+ * ÖNEMLİ:
+ * Normal bir TYPE_APPLICATION_OVERLAY penceresi, başka uygulamaların ayrı
+ * Surface'larıyla doğrudan Porter-Duff kompozitleme yapamaz. Bu nedenle
+ * aşağıdaki DIFFERENCE kullanımı yalnızca bu overlay yüzeyinin kendi
+ * render'ında geçerlidir; başka uygulamaların ekranını gerçek anlamda
+ * ters çevirdiği garanti edilemez.
+ *
+ * API 27-28'de BlendMode bulunmadığı için invert katmanı bu sürümlerde
+ * oluşturulmaz. Karartma katmanı ise tüm minSdk sürümlerinde çalışır.
  */
 class OverlayService : Service() {
 
@@ -37,9 +45,9 @@ class OverlayService : Service() {
 
         private const val CHANNEL_ID = "overlay_channel"
         private const val NOTIF_ID = 1001
+        private const val TAG = "OverlayService"
 
-        // Karartma katmanının opaklığı (0x00 şeffaf - 0xFF tam siyah arası).
-        // Şu an ~%35 siyah. Daha fazla/az karartma istenirse bu değer değiştirilebilir.
+        // Karartma katmanının opaklığı (0x00 şeffaf - 0xFF tam siyah).
         private const val DIM_ALPHA = 0x59
     }
 
@@ -55,6 +63,7 @@ class OverlayService : Service() {
             ACTION_DIM_ON -> addDimOverlay()
             ACTION_DIM_OFF -> removeDimOverlay()
         }
+
         updateForegroundState()
         return START_STICKY
     }
@@ -72,22 +81,37 @@ class OverlayService : Service() {
     private fun addInvertOverlay() {
         if (invertView != null) return
 
-        val view = View(this)
-        view.setBackgroundColor(0xFFFFFFFF.toInt())
+        // BlendMode.DIFFERENCE API 29'da geldi.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Log.w(TAG, "Invert overlay requires API 29+; current API=${Build.VERSION.SDK_INT}")
+            return
+        }
 
-        // GPU katmanı üzerinde DIFFERENCE karışım modu uygulayarak
-        // altındaki içerik ile bu beyaz katmanı ters çevirecek şekilde birleştir.
-        val xfermodePaint = Paint()
-        xfermodePaint.xfermode = PorterDuffXfermode(PorterDuff.Mode.DIFFERENCE)
-        view.setLayerType(View.LAYER_TYPE_HARDWARE, xfermodePaint)
+        val view = View(this).apply {
+            setBackgroundColor(0xFFFFFFFF.toInt())
+
+            // Paint'ın blendMode'u yalnızca bu View'ın kendi render katmanına
+            // uygulanır. Başka uygulamaların Surface'ını doğrudan değiştirmez.
+            val blendPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                blendMode = BlendMode.DIFFERENCE
+            }
+
+            setLayerType(View.LAYER_TYPE_HARDWARE, blendPaint)
+        }
 
         invertView = view
-        windowManager?.addView(view, buildOverlayParams())
+        runCatching {
+            windowManager?.addView(view, buildOverlayParams())
+        }.onFailure {
+            invertView = null
+            Log.e(TAG, "Failed to add invert overlay", it)
+        }
     }
 
     private fun removeInvertOverlay() {
-        invertView?.let {
-            runCatching { windowManager?.removeView(it) }
+        invertView?.let { view ->
+            runCatching { windowManager?.removeView(view) }
+                .onFailure { Log.w(TAG, "Failed to remove invert overlay", it) }
             invertView = null
         }
     }
@@ -97,16 +121,23 @@ class OverlayService : Service() {
     private fun addDimOverlay() {
         if (dimView != null) return
 
-        val view = View(this)
-        view.setBackgroundColor((DIM_ALPHA shl 24)) // yarı saydam siyah
+        val view = View(this).apply {
+            setBackgroundColor(DIM_ALPHA shl 24)
+        }
 
         dimView = view
-        windowManager?.addView(view, buildOverlayParams())
+        runCatching {
+            windowManager?.addView(view, buildOverlayParams())
+        }.onFailure {
+            dimView = null
+            Log.e(TAG, "Failed to add dim overlay", it)
+        }
     }
 
     private fun removeDimOverlay() {
-        dimView?.let {
-            runCatching { windowManager?.removeView(it) }
+        dimView?.let { view ->
+            runCatching { windowManager?.removeView(view) }
+                .onFailure { Log.w(TAG, "Failed to remove dim overlay", it) }
             dimView = null
         }
     }
@@ -158,3 +189,4 @@ class OverlayService : Service() {
         startForeground(NOTIF_ID, notification)
     }
 }
+
